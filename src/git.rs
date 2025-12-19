@@ -1,28 +1,21 @@
 use crate::editor::CrateEditor;
 use anyhow::{Context, Result};
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub fn get_unique_repos(members: &[PathBuf]) -> Result<Vec<PathBuf>> {
-    let mut repos = HashSet::new();
-    let mut unique_paths = Vec::new();
+pub fn group_members_by_repo(members: &[PathBuf]) -> Result<HashMap<PathBuf, Vec<PathBuf>>> {
+    let mut repo_map: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
 
     for member in members {
         if let Some(git_root) = find_git_root(member)? {
-            // Canonicalize to ensure simple string comparison works (or just use PathBuf uniqueness)
-            // But git_root being absolute from find_git_root helps.
-            if repos.insert(git_root.clone()) {
-                unique_paths.push(git_root);
-            }
+            repo_map.entry(git_root).or_default().push(member.clone());
         } else {
             println!("Warning: No git repository found for member {:?}", member);
         }
     }
 
-    // Sort for deterministic order
-    unique_paths.sort();
-    Ok(unique_paths)
+    Ok(repo_map)
 }
 
 fn find_git_root(path: &Path) -> Result<Option<PathBuf>> {
@@ -92,43 +85,33 @@ pub fn push(repo_path: &Path) -> Result<()> {
     run_git_cmd(repo_path, &["push", "-u", "origin", &branch])
 }
 
-pub fn commit(repo_path: &Path, message: Option<&str>) -> Result<()> {
-    println!("Committing in {:?}", repo_path);
+pub fn commit(repo_path: &Path, message: &str, files: &[PathBuf]) -> Result<()> {
+    println!("Committing in {:?} with message '{}'", repo_path, message);
 
-    let msg = if let Some(m) = message {
-        m.to_string()
-    } else {
-        // Scan for a VERSION to use in the message
-        // We'll look for Cargo.toml in the repo root first, or search subdirs?
-        // User requirement: "complete the version from the version of the package"
-        // Since a repo can contain multiple packages, this is ambiguous.
-        // I will look for a Cargo.toml in the repo root. If not found, I might scan subdirs to find *one*.
-        // Or iterate the members that belong to this repo.
-        // For simplicity, let's try reading Cargo.toml at repo root.
+    if files.is_empty() {
+        println!("No files to commit in {:?}", repo_path);
+        return Ok(());
+    }
 
-        let cargo_toml = repo_path.join("Cargo.toml");
-        let version_str = if cargo_toml.exists() {
-            if let Ok(editor) = CrateEditor::new(repo_path) {
-                editor
-                    .get_version()
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|| "unknown".to_string())
-            } else {
-                "unknown".to_string()
-            }
-        } else {
-            // Fallback: This might be a workspace root or valid repo without package at root.
-            "unknown".to_string()
-        };
-        format!("bump version {}", version_str)
-    };
+    // 1. Add specific files
+    // Convert absolute paths to relative paths strictly for git add (though git add accepts absolute if within repo usually, safer to be relative or just pass them)
+    // Actually git add works fine with absolute paths usually, but let's try just passing them.
+    let mut args = vec!["add"];
+    let file_strs: Vec<String> = files
+        .iter()
+        .map(|p| p.to_string_lossy().to_string())
+        .collect();
+    args.extend(file_strs.iter().map(|s| s.as_str()));
 
-    run_git_cmd(repo_path, &["commit", "-am", &msg])
+    run_git_cmd(repo_path, &args)?;
+
+    // 2. Commit
+    run_git_cmd(repo_path, &["commit", "-m", message])
 }
 
 pub fn create_tag(repo_path: &Path) -> Result<()> {
     println!("Creating tag in {:?}", repo_path);
-    // Same version logic as commit
+    // Same version logic as commit used to have, we keep it for tagging
     let cargo_toml = repo_path.join("Cargo.toml");
     let version_str = if cargo_toml.exists() {
         if let Ok(editor) = CrateEditor::new(repo_path) {

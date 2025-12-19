@@ -38,9 +38,9 @@ enum Commands {
     Merge { branch: String },
     /// Commit changes with a version bump message in all repositories
     Commit {
-        /// Custom commit message. If not provided, defaults to "bump version <version>"
+        /// Custom commit message (required)
         #[arg(short, long)]
-        message: Option<String>,
+        message: String,
     },
     /// Push changes to remote in all repositories
     Push,
@@ -68,27 +68,28 @@ fn main() -> Result<()> {
     match &cli.command {
         Commands::Bump { version } => bump_all(version),
         Commands::Init => generate_meta(),
-        Commands::Branch { name } => run_git_on_all(|repo| git::create_branch(repo, &name)),
-        Commands::Checkout { name } => run_git_on_all(|repo| git::checkout_branch(repo, &name)),
-        Commands::Merge { branch } => run_git_on_all(|repo| git::merge_branch(repo, &branch)),
-        Commands::Commit { message } => {
-            run_git_on_all(|repo| git::commit(repo, message.as_deref()))
-        }
-        Commands::Push => run_git_on_all(|repo| git::push(repo)),
-        Commands::PushTag => run_git_on_all(|repo| git::push_tag(repo)),
-        Commands::Tag => run_git_on_all(|repo| git::create_tag(repo)),
+        Commands::Branch { name } => run_git_on_all(|repo, _| git::create_branch(repo, &name)),
+        Commands::Checkout { name } => run_git_on_all(|repo, _| git::checkout_branch(repo, &name)),
+        Commands::Merge { branch } => run_git_on_all(|repo, _| git::merge_branch(repo, &branch)),
+        Commands::Commit { message } => run_git_on_all(|repo, members| {
+            let files: Vec<PathBuf> = members.iter().map(|m| m.join("Cargo.toml")).collect();
+            git::commit(repo, message, &files)
+        }),
+        Commands::Push => run_git_on_all(|repo, _| git::push(repo)),
+        Commands::PushTag => run_git_on_all(|repo, _| git::push_tag(repo)),
+        Commands::Tag => run_git_on_all(|repo, _| git::create_tag(repo)),
         Commands::RemoveBranch { name, remote } => {
-            run_git_on_all(|repo| git::remove_branch(repo, &name, *remote))
+            run_git_on_all(|repo, _| git::remove_branch(repo, &name, *remote))
         }
         Commands::RemoveTag { name, remote } => {
-            run_git_on_all(|repo| git::remove_tag(repo, &name, *remote))
+            run_git_on_all(|repo, _| git::remove_tag(repo, &name, *remote))
         }
     }
 }
 
 fn run_git_on_all<F>(op: F) -> Result<()>
 where
-    F: Fn(&Path) -> Result<()>,
+    F: Fn(&Path, &[PathBuf]) -> Result<()>,
 {
     let config = MetaConfig::load()?;
     let member_paths: Vec<PathBuf> = config
@@ -98,13 +99,13 @@ where
         .map(|m| PathBuf::from(m))
         .collect();
 
-    let repos = git::get_unique_repos(&member_paths)?;
+    let repo_map = git::group_members_by_repo(&member_paths)?;
 
-    println!("Found {} unique repositories.", repos.len());
+    println!("Found {} unique repositories.", repo_map.len());
 
-    for repo in repos {
-        if let Err(e) = op(&repo) {
-            eprintln!("Error in repo {:?}: {}", repo, e);
+    for (repo_root, members) in repo_map {
+        if let Err(e) = op(&repo_root, &members) {
+            eprintln!("Error in repo {:?}: {}", repo_root, e);
         }
     }
     Ok(())
@@ -565,6 +566,76 @@ version = "1.2.3"
             .output()?;
         let stdout = String::from_utf8(output.stdout)?;
         assert!(stdout.contains("v1.2.3"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_commit_specifics() -> Result<()> {
+        // Setup repo
+        let temp_dir = tempdir()?;
+        let root = temp_dir.path();
+
+        let status = std::process::Command::new("git")
+            .current_dir(root)
+            .args(&["init"])
+            .status()?;
+        assert!(status.success());
+
+        std::process::Command::new("git")
+            .current_dir(root)
+            .args(&["config", "user.email", "you@example.com"])
+            .status()?;
+        std::process::Command::new("git")
+            .current_dir(root)
+            .args(&["config", "user.name", "Your Name"])
+            .status()?;
+
+        // Create Cargo.toml and another file
+        let cargo_path = root.join("Cargo.toml");
+        fs::write(&cargo_path, "[package]\nname=\"foo\"\nversion=\"0.1.0\"")?;
+
+        let random_path = root.join("random.txt");
+        fs::write(&random_path, "initial content")?;
+
+        // Initial commit
+        std::process::Command::new("git")
+            .current_dir(root)
+            .args(&["add", "."])
+            .status()?;
+        std::process::Command::new("git")
+            .current_dir(root)
+            .args(&["commit", "-m", "Initial"])
+            .status()?;
+
+        // Modify both
+        fs::write(&cargo_path, "[package]\nname=\"foo\"\nversion=\"0.2.0\"")?;
+        fs::write(&random_path, "modified content")?;
+
+        // Run git::commit via our new logic
+        crate::git::commit(root, "update cargo", &[cargo_path.clone()])?;
+
+        // Verify status: valid commit, random.txt modified but not staged
+        let output = std::process::Command::new("git")
+            .current_dir(root)
+            .args(&["status", "--porcelain"])
+            .output()?;
+        let stdout = String::from_utf8(output.stdout)?;
+
+        // M random.txt (modified in work tree)
+        // clean cargo.toml (already committed, so not in status or at least not modified relative to index if staged and committed)
+        // If committed, it should show as clean.
+        // Wait, 'M' in porcelain means modified. If we committed, it should be clean.
+        assert!(stdout.contains("M random.txt"));
+        assert!(!stdout.contains("M Cargo.toml"));
+
+        // Verify log
+        let output = std::process::Command::new("git")
+            .current_dir(root)
+            .args(&["log", "-1", "--pretty=%B"])
+            .output()?;
+        let stdout = String::from_utf8(output.stdout)?.trim().to_string();
+        assert_eq!(stdout, "update cargo");
 
         Ok(())
     }
