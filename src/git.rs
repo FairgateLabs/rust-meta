@@ -94,14 +94,35 @@ pub fn commit(repo_path: &Path, message: &str, files: &[PathBuf]) -> Result<()> 
     }
 
     // 1. Add specific files
-    // Convert absolute paths to relative paths strictly for git add (though git add accepts absolute if within repo usually, safer to be relative or just pass them)
-    // Actually git add works fine with absolute paths usually, but let's try just passing them.
+    // Convert paths to be relative to the repo_root (repo_path)
     let mut args = vec!["add"];
-    let file_strs: Vec<String> = files
-        .iter()
-        .map(|p| p.to_string_lossy().to_string())
-        .collect();
-    args.extend(file_strs.iter().map(|s| s.as_str()));
+    let mut relative_paths = Vec::new();
+
+    for file in files {
+        // We canonicalize to ensure we have an absolute path that matches repo_path's canonical nature.
+        // If the file doesn't exist (e.g. deleted), canonicalize fails.
+        // In the case of version bumping/modification, it should exist.
+        // If it doesn't, we might fallback to just using it as is or skipping.
+        let abs_file = if file.exists() {
+            file.canonicalize().unwrap_or_else(|_| file.to_path_buf())
+        } else {
+            // If it doesn't exist, we can't easily strip prefix if it's relative and repo is absolute.
+            // But let's assume it's absolute or relative to CWD.
+            // For now, let's just try to use it as is if canonicalize fails.
+            file.to_path_buf()
+        };
+
+        match abs_file.strip_prefix(repo_path) {
+            Ok(rel) => relative_paths.push(rel.to_string_lossy().to_string()),
+            Err(_) => {
+                // If we can't strip prefix, maybe it's already relative or outside repo?
+                // Just use the path as provided.
+                relative_paths.push(file.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    args.extend(relative_paths.iter().map(|s| s.as_str()));
 
     run_git_cmd(repo_path, &args)?;
 
