@@ -85,6 +85,23 @@ pub fn push(repo_path: &Path) -> Result<()> {
     run_git_cmd(repo_path, &["push", "-u", "origin", &branch])
 }
 
+pub fn pull(repo_path: &Path) -> Result<()> {
+    println!("Pulling in {:?}", repo_path);
+    // Get current branch name
+    let output = Command::new("git")
+        .current_dir(repo_path)
+        .args(&["rev-parse", "--abbrev-ref", "HEAD"])
+        .output()?;
+    let branch = String::from_utf8(output.stdout)?.trim().to_string();
+
+    run_git_cmd(repo_path, &["pull", "origin", &branch])
+}
+
+pub fn fetch(repo_path: &Path) -> Result<()> {
+    println!("Fetching in {:?}", repo_path);
+    run_git_cmd(repo_path, &["fetch", "origin"])
+}
+
 pub fn commit(repo_path: &Path, message: &str, files: &[PathBuf]) -> Result<()> {
     println!("Committing in {:?} with message '{}'", repo_path, message);
 

@@ -9,7 +9,7 @@
   - Branching (`branch`, `checkout`, `remove-branch`)
   - Merging (`merge`)
   - Committing (`commit`)
-  - Pushing (`push`, `push-tag`)
+  - Pushing/Pulling (`push`, `pull`, `fetch`, `push-tag`)
   - Tagging (`tag`, `remove-tag`)
 - **Workspace Initialization**: Easily initialize a new meta-workspace configuration (`Meta.toml`) by scanning the current directory.
 
@@ -49,8 +49,10 @@ meta checkout develop
 meta commit -m "feat: update dependencies"
 # If message is omitted, defaults to "bump version <version>" if used after bump
 
-# Push changes
+# Push or pull changes
 meta push
+meta pull
+meta fetch
 
 # Create tags and push them
 meta tag

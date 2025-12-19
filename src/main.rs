@@ -44,6 +44,10 @@ enum Commands {
     },
     /// Push changes to remote in all repositories
     Push,
+    /// Pull changes from remote in all repositories
+    Pull,
+    /// Fetch changes from remote in all repositories
+    Fetch,
     /// Push the version tag to origin (vX.Y.Z)
     PushTag,
     /// Create a version tag in all repositories
@@ -76,6 +80,8 @@ fn main() -> Result<()> {
             git::commit(repo, message, &files)
         }),
         Commands::Push => run_git_on_all(|repo, _| git::push(repo)),
+        Commands::Pull => run_git_on_all(|repo, _| git::pull(repo)),
+        Commands::Fetch => run_git_on_all(|repo, _| git::fetch(repo)),
         Commands::PushTag => run_git_on_all(|repo, _| git::push_tag(repo)),
         Commands::Tag => run_git_on_all(|repo, _| git::create_tag(repo)),
         Commands::RemoveBranch { name, remote } => {
@@ -566,6 +572,157 @@ version = "1.2.3"
             .output()?;
         let stdout = String::from_utf8(output.stdout)?;
         assert!(stdout.contains("v1.2.3"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_git_pull() -> Result<()> {
+        // 1. Setup temp repositories
+        let temp_dir = tempdir()?;
+        let remote_root = temp_dir.path().join("remote.git");
+        let local_root = temp_dir.path().join("local");
+
+        // Init remote bare repo
+        std::process::Command::new("git")
+            .args(&["init", "--bare", remote_root.to_str().unwrap()])
+            .status()?;
+
+        // Init local repo
+        std::process::Command::new("git")
+            .args(&["init", local_root.to_str().unwrap()])
+            .status()?;
+
+        // Configure local repo
+        std::process::Command::new("git")
+            .current_dir(&local_root)
+            .args(&["config", "user.email", "you@example.com"])
+            .status()?;
+        std::process::Command::new("git")
+            .current_dir(&local_root)
+            .args(&["config", "user.name", "Your Name"])
+            .status()?;
+        std::process::Command::new("git")
+            .current_dir(&local_root)
+            .args(&["remote", "add", "origin", remote_root.to_str().unwrap()])
+            .status()?;
+
+        // 2. Create and push initial commit from another clone to the remote
+        let other_clone = temp_dir.path().join("other_clone");
+        std::process::Command::new("git")
+            .args(&[
+                "clone",
+                remote_root.to_str().unwrap(),
+                other_clone.to_str().unwrap(),
+            ])
+            .status()?;
+
+        std::process::Command::new("git")
+            .current_dir(&other_clone)
+            .args(&["config", "user.email", "you@example.com"])
+            .status()?;
+        std::process::Command::new("git")
+            .current_dir(&other_clone)
+            .args(&["config", "user.name", "Your Name"])
+            .status()?;
+
+        fs::write(other_clone.join("README.md"), "initial")?;
+        std::process::Command::new("git")
+            .current_dir(&other_clone)
+            .args(&["add", "."])
+            .status()?;
+        std::process::Command::new("git")
+            .current_dir(&other_clone)
+            .args(&["commit", "-m", "Initial"])
+            .status()?;
+        std::process::Command::new("git")
+            .current_dir(&other_clone)
+            .args(&["push", "-u", "origin", "master"])
+            .status()?;
+
+        // 3. Local pull (should bring README.md)
+        // First checkout master locally (it might not exist if just init)
+        // Actually, just pull might work if we specify branch, but let's be safe.
+        // The local repo is empty. Let's try to pull.
+        crate::git::pull(&local_root)?;
+
+        assert!(local_root.join("README.md").exists());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_git_fetch() -> Result<()> {
+        // 1. Setup temp repositories
+        let temp_dir = tempdir()?;
+        let remote_root = temp_dir.path().join("remote.git");
+        let local_root = temp_dir.path().join("local");
+
+        // Init remote bare repo
+        std::process::Command::new("git")
+            .args(&["init", "--bare", remote_root.to_str().unwrap()])
+            .status()?;
+
+        // Init local repo
+        std::process::Command::new("git")
+            .args(&["init", local_root.to_str().unwrap()])
+            .status()?;
+
+        // Configure local repo
+        std::process::Command::new("git")
+            .current_dir(&local_root)
+            .args(&["config", "user.email", "you@example.com"])
+            .status()?;
+        std::process::Command::new("git")
+            .current_dir(&local_root)
+            .args(&["config", "user.name", "Your Name"])
+            .status()?;
+        std::process::Command::new("git")
+            .current_dir(&local_root)
+            .args(&["remote", "add", "origin", remote_root.to_str().unwrap()])
+            .status()?;
+
+        // 2. Commit something to remote from other clone
+        let other_clone = temp_dir.path().join("other_clone");
+        std::process::Command::new("git")
+            .args(&[
+                "clone",
+                remote_root.to_str().unwrap(),
+                other_clone.to_str().unwrap(),
+            ])
+            .status()?;
+        std::process::Command::new("git")
+            .current_dir(&other_clone)
+            .args(&["config", "user.email", "you@example.com"])
+            .status()?;
+        std::process::Command::new("git")
+            .current_dir(&other_clone)
+            .args(&["config", "user.name", "Your Name"])
+            .status()?;
+
+        fs::write(other_clone.join("data.txt"), "remote data")?;
+        std::process::Command::new("git")
+            .current_dir(&other_clone)
+            .args(&["add", "."])
+            .status()?;
+        std::process::Command::new("git")
+            .current_dir(&other_clone)
+            .args(&["commit", "-m", "Remote change"])
+            .status()?;
+        std::process::Command::new("git")
+            .current_dir(&other_clone)
+            .args(&["push", "origin", "master"])
+            .status()?;
+
+        // 3. Local fetch
+        crate::git::fetch(&local_root)?;
+
+        // Verify that FETCH_HEAD exists or origin/master is updated
+        let output = std::process::Command::new("git")
+            .current_dir(&local_root)
+            .args(&["rev-parse", "origin/master"])
+            .output()?;
+        assert!(output.status.success());
 
         Ok(())
     }
