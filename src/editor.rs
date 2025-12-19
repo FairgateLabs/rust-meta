@@ -84,14 +84,6 @@ impl CrateEditor {
             .map(|s| s.to_string())
     }
 
-    pub fn get_version(&self) -> Option<Version> {
-        self.doc
-            .get("package")
-            .and_then(|p| p.get("version"))
-            .and_then(|v| v.as_str())
-            .and_then(|s| Version::parse(s).ok())
-    }
-
     pub fn save(&self) -> Result<()> {
         let manifest_path = self.path.join("Cargo.toml");
         fs::write(manifest_path, self.doc.to_string())?;

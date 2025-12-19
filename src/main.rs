@@ -49,9 +49,9 @@ enum Commands {
     /// Fetch changes from remote in all repositories
     Fetch,
     /// Push the version tag to origin (vX.Y.Z)
-    PushTag,
+    PushTag { version: Version },
     /// Create a version tag in all repositories
-    Tag,
+    Tag { version: Version },
     /// Remove a branch in all repositories
     RemoveBranch {
         name: String,
@@ -82,8 +82,12 @@ fn main() -> Result<()> {
         Commands::Push => run_git_on_all(|repo, _| git::push(repo)),
         Commands::Pull => run_git_on_all(|repo, _| git::pull(repo)),
         Commands::Fetch => run_git_on_all(|repo, _| git::fetch(repo)),
-        Commands::PushTag => run_git_on_all(|repo, _| git::push_tag(repo)),
-        Commands::Tag => run_git_on_all(|repo, _| git::create_tag(repo)),
+        Commands::PushTag { version } => {
+            run_git_on_all(|repo, _| git::push_tag(repo, &version.to_string()))
+        }
+        Commands::Tag { version } => {
+            run_git_on_all(|repo, _| git::create_tag(repo, &version.to_string()))
+        }
         Commands::RemoveBranch { name, remote } => {
             run_git_on_all(|repo, _| git::remove_branch(repo, &name, *remote))
         }
@@ -544,7 +548,7 @@ version = "1.2.3"
         assert!(stdout.contains("feature-x"));
 
         // Test Tag
-        crate::git::create_tag(root)?;
+        crate::git::create_tag(root, "1.2.3")?;
         let output = std::process::Command::new("git")
             .current_dir(root)
             .args(&["tag"])
@@ -563,7 +567,7 @@ version = "1.2.3"
             .status()?;
 
         // Test PushTag
-        crate::git::push_tag(root)?;
+        crate::git::push_tag(root, "1.2.3")?;
 
         // Verify tag exists in remote
         let output = std::process::Command::new("git")
@@ -723,6 +727,50 @@ version = "1.2.3"
             .args(&["rev-parse", "origin/master"])
             .output()?;
         assert!(output.status.success());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_manual_tag() -> Result<()> {
+        // Setup repo
+        let temp_dir = tempdir()?;
+        let root = temp_dir.path();
+
+        let status = std::process::Command::new("git")
+            .current_dir(root)
+            .args(&["init"])
+            .status()?;
+        assert!(status.success());
+
+        // Create initial commit
+        fs::write(root.join("README.md"), "init")?;
+        std::process::Command::new("git")
+            .current_dir(root)
+            .args(&["add", "."])
+            .status()?;
+        std::process::Command::new("git")
+            .current_dir(root)
+            .args(&["config", "user.email", "you@example.com"])
+            .status()?;
+        std::process::Command::new("git")
+            .current_dir(root)
+            .args(&["config", "user.name", "Your Name"])
+            .status()?;
+        std::process::Command::new("git")
+            .current_dir(root)
+            .args(&["commit", "-m", "Initial"])
+            .status()?;
+
+        // Test manual tag
+        crate::git::create_tag(root, "2.0.0-rc1")?;
+
+        let output = std::process::Command::new("git")
+            .current_dir(root)
+            .args(&["tag"])
+            .output()?;
+        let stdout = String::from_utf8(output.stdout)?;
+        assert!(stdout.contains("v2.0.0-rc1"));
 
         Ok(())
     }

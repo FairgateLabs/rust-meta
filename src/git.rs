@@ -1,4 +1,3 @@
-use crate::editor::CrateEditor;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -147,61 +146,15 @@ pub fn commit(repo_path: &Path, message: &str, files: &[PathBuf]) -> Result<()> 
     run_git_cmd(repo_path, &["commit", "-m", message])
 }
 
-pub fn create_tag(repo_path: &Path) -> Result<()> {
-    println!("Creating tag in {:?}", repo_path);
-    // Same version logic as commit used to have, we keep it for tagging
-    let cargo_toml = repo_path.join("Cargo.toml");
-    let version_str = if cargo_toml.exists() {
-        if let Ok(editor) = CrateEditor::new(repo_path) {
-            editor
-                .get_version()
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "unknown".to_string())
-        } else {
-            "unknown".to_string()
-        }
-    } else {
-        "unknown".to_string()
-    };
-
-    if version_str == "unknown" {
-        println!(
-            "Skipping tag in {:?}: Could not determine version",
-            repo_path
-        );
-        return Ok(());
-    }
-
-    let tag_name = format!("v{}", version_str);
+pub fn create_tag(repo_path: &Path, version: &str) -> Result<()> {
+    println!("Creating tag 'v{}' in {:?}", version, repo_path);
+    let tag_name = format!("v{}", version);
     run_git_cmd(repo_path, &["tag", &tag_name])
 }
 
-pub fn push_tag(repo_path: &Path) -> Result<()> {
-    println!("Pushing tag in {:?}", repo_path);
-    // Same version logic as commit/tag
-    let cargo_toml = repo_path.join("Cargo.toml");
-    let version_str = if cargo_toml.exists() {
-        if let Ok(editor) = CrateEditor::new(repo_path) {
-            editor
-                .get_version()
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "unknown".to_string())
-        } else {
-            "unknown".to_string()
-        }
-    } else {
-        "unknown".to_string()
-    };
-
-    if version_str == "unknown" {
-        println!(
-            "Skipping push_tag in {:?}: Could not determine version",
-            repo_path
-        );
-        return Ok(());
-    }
-
-    let tag_name = format!("v{}", version_str);
+pub fn push_tag(repo_path: &Path, version: &str) -> Result<()> {
+    println!("Pushing tag 'v{}' in {:?}", version, repo_path);
+    let tag_name = format!("v{}", version);
     run_git_cmd(repo_path, &["push", "origin", &tag_name])
 }
 

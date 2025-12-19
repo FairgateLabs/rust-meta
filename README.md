@@ -55,8 +55,8 @@ meta pull
 meta fetch
 
 # Create tags and push them
-meta tag
-meta push-tag
+meta tag 1.2.3          # Uses specific version (mandatory)
+meta push-tag 1.2.3     # Pushes specific version tag (mandatory)
 ```
 
 ## Configuration
