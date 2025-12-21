@@ -64,6 +64,14 @@ enum Commands {
         #[arg(long)]
         remote: bool,
     },
+    /// Execute an arbitrary command in all repositories or in each crate
+    Exec {
+        /// The command to execute
+        command: String,
+        /// Run the command in each crate directory instead of the repository root
+        #[arg(long)]
+        crate_dir: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -94,6 +102,7 @@ fn main() -> Result<()> {
         Commands::RemoveTag { name, remote } => {
             run_git_on_all(|repo, _| git::remove_tag(repo, &name, *remote))
         }
+        Commands::Exec { command, crate_dir } => exec_on_all(command, *crate_dir),
     }
 }
 
@@ -116,6 +125,39 @@ where
     for (repo_root, members) in repo_map {
         if let Err(e) = op(&repo_root, &members) {
             eprintln!("Error in repo {:?}: {}", repo_root, e);
+        }
+    }
+    Ok(())
+}
+
+fn exec_on_all(command: &str, crate_dir: bool) -> Result<()> {
+    let config = MetaConfig::load()?;
+    let member_paths: Vec<PathBuf> = config
+        .workspace
+        .members
+        .iter()
+        .map(|m| PathBuf::from(m))
+        .collect();
+
+    let repo_map = git::group_members_by_repo(&member_paths)?;
+
+    println!("Found {} unique repositories.", repo_map.len());
+
+    for (repo_root, members) in repo_map {
+        if crate_dir {
+            // Execute in each crate directory
+            for member in members {
+                println!("\nExecuting '{}' in {:?}", command, member);
+                if let Err(e) = git::execute_command(&member, command) {
+                    eprintln!("Error executing in {:?}: {}", member, e);
+                }
+            }
+        } else {
+            // Execute in repository root
+            println!("\nExecuting '{}' in {:?}", command, repo_root);
+            if let Err(e) = git::execute_command(&repo_root, command) {
+                eprintln!("Error executing in {:?}: {}", repo_root, e);
+            }
         }
     }
     Ok(())

@@ -180,3 +180,23 @@ fn run_git_cmd(repo_path: &Path, args: &[&str]) -> Result<()> {
     }
     Ok(())
 }
+
+pub fn execute_command(work_dir: &Path, command: &str) -> Result<()> {
+    let status = if cfg!(target_os = "windows") {
+        Command::new("cmd")
+            .current_dir(work_dir)
+            .args(&["/C", command])
+            .status()
+    } else {
+        Command::new("sh")
+            .current_dir(work_dir)
+            .args(&["-c", command])
+            .status()
+    }
+    .context(format!("Failed to execute command: {}", command))?;
+
+    if !status.success() {
+        anyhow::bail!("Command failed with status: {:?}", status);
+    }
+    Ok(())
+}
