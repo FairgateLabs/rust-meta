@@ -27,6 +27,9 @@ enum Commands {
     Bump {
         /// The new version to set (e.g. "0.2.0")
         version: Version,
+        /// Only bump the version, don't update dependency references
+        #[arg(long, default_value_t = false)]
+        only_version: bool,
     },
     /// Initialize a new Meta.toml by scanning the current directory
     Init,
@@ -78,7 +81,10 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::Bump { version } => bump_all(version),
+        Commands::Bump {
+            version,
+            only_version,
+        } => bump_all(version, *only_version),
         Commands::Init => generate_meta(),
         Commands::Branch { name } => run_git_on_all(|repo, _| git::create_branch(repo, &name)),
         Commands::Checkout { name } => run_git_on_all(|repo, _| git::checkout_branch(repo, &name)),
@@ -272,7 +278,7 @@ fn process_crate_or_workspace(
     Ok(())
 }
 
-fn bump_all(new_version: &Version) -> Result<()> {
+fn bump_all(new_version: &Version, only_version: bool) -> Result<()> {
     let config = MetaConfig::load()?;
     let mut editors = Vec::new();
 
@@ -298,17 +304,26 @@ fn bump_all(new_version: &Version) -> Result<()> {
 
         editor.bump_version(new_version)?;
 
-        // Convert HashSet to Vec for the API I designed in editor.rs (oops, I designed it as slice, so strict ref is okay)
-        // Actually editor.rs takes &[String]. HashSet doesn't blindly turn into slice.
-        // I should update editor.rs or just collect here.
-        // Let's collect to a sorted vec for stability or just iterate.
-        let member_names_vec: Vec<String> = member_names.iter().cloned().collect();
-        editor.update_dependencies(&member_names_vec, new_version)?;
+        if !only_version {
+            // Convert HashSet to Vec for the API I designed in editor.rs (oops, I designed it as slice, so strict ref is okay)
+            // Actually editor.rs takes &[String]. HashSet doesn't blindly turn into slice.
+            // I should update editor.rs or just collect here.
+            // Let's collect to a sorted vec for stability or just iterate.
+            let member_names_vec: Vec<String> = member_names.iter().cloned().collect();
+            editor.update_dependencies(&member_names_vec, new_version)?;
+        }
 
         editor.save()?;
     }
 
-    println!("Successfully bumped all crates to {}", new_version);
+    if only_version {
+        println!(
+            "Successfully bumped all crate versions to {} (dependencies not updated)",
+            new_version
+        );
+    } else {
+        println!("Successfully bumped all crates to {}", new_version);
+    }
     Ok(())
 }
 
@@ -883,6 +898,91 @@ version = "1.2.3"
             .output()?;
         let stdout = String::from_utf8(output.stdout)?.trim().to_string();
         assert_eq!(stdout, "update cargo");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_bump_only_version() -> Result<()> {
+        let temp_dir = tempdir()?;
+        let workspace_root = temp_dir.path();
+
+        // Create workspace structure
+        fs::write(
+            workspace_root.join("Meta.toml"),
+            r#"[workspace]
+members = [
+    "crate_a",
+    "crate_b"
+]
+"#,
+        )?;
+
+        fs::create_dir(workspace_root.join("crate_a"))?;
+        fs::write(
+            workspace_root.join("crate_a/Cargo.toml"),
+            r#"[package]
+name = "crate_a"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+"#,
+        )?;
+
+        fs::create_dir(workspace_root.join("crate_b"))?;
+        fs::write(
+            workspace_root.join("crate_b/Cargo.toml"),
+            r#"[package]
+name = "crate_b"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+crate_a = { git = "https://github.com/foo/crate_a", tag = "v0.1.0" }
+"#,
+        )?;
+
+        // Load config and run bump with only_version = true
+        let config_path = workspace_root.join("Meta.toml");
+        let content = fs::read_to_string(&config_path)?;
+        let config: MetaConfig = toml_edit::de::from_str(&content)?;
+
+        let new_version = Version::parse("0.2.0")?;
+        let mut editors = Vec::new();
+
+        for member_path in &config.workspace.members {
+            let path = workspace_root.join(member_path);
+            let editor = CrateEditor::new(&path)?;
+            editors.push(editor);
+        }
+
+        // Test with only_version = true (should not update dependencies)
+        for editor in &mut editors {
+            editor.bump_version(&new_version)?;
+            // Deliberately NOT calling update_dependencies to simulate --only-version
+            editor.save()?;
+        }
+
+        // Verify crate versions were bumped
+        let crate_a_toml = fs::read_to_string(workspace_root.join("crate_a/Cargo.toml"))?;
+        assert!(crate_a_toml.contains(r#"version = "0.2.0""#));
+
+        let crate_b_toml = fs::read_to_string(workspace_root.join("crate_b/Cargo.toml"))?;
+        assert!(crate_b_toml.contains(r#"version = "0.2.0""#));
+
+        // Verify dependency was NOT updated (should still be v0.1.0)
+        assert!(
+            crate_b_toml.contains(
+                r#"crate_a = { git = "https://github.com/foo/crate_a", tag = "v0.1.0" }"#
+            )
+        );
+        // Make sure it wasn't updated to v0.2.0
+        assert!(
+            !crate_b_toml.contains(
+                r#"crate_a = { git = "https://github.com/foo/crate_a", tag = "v0.2.0" }"#
+            )
+        );
 
         Ok(())
     }
