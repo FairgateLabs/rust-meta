@@ -75,6 +75,8 @@ enum Commands {
         #[arg(long)]
         crate_dir: bool,
     },
+    /// List open pull requests for each repository
+    Prs,
 }
 
 fn main() -> Result<()> {
@@ -109,6 +111,10 @@ fn main() -> Result<()> {
             run_git_on_all(|repo, _| git::remove_tag(repo, &name, *remote))
         }
         Commands::Exec { command, crate_dir } => exec_on_all(command, *crate_dir),
+        Commands::Prs => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(list_prs())
+        }
     }
 }
 
@@ -167,6 +173,93 @@ fn exec_on_all(command: &str, crate_dir: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+async fn list_prs() -> Result<()> {
+    let token =
+        std::env::var("GITHUB_TOKEN").context("GITHUB_TOKEN environment variable not set")?;
+
+    let octocrab = octocrab::OctocrabBuilder::new()
+        .personal_token(token)
+        .build()?;
+
+    let config = MetaConfig::load()?;
+    let member_paths: Vec<PathBuf> = config
+        .workspace
+        .members
+        .iter()
+        .map(|m| PathBuf::from(m))
+        .collect();
+
+    let repo_map = git::group_members_by_repo(&member_paths)?;
+
+    // Deduplicate repos (group_members_by_repo already gives unique repos)
+    println!("Fetching open PRs for {} repositories...\n", repo_map.len());
+
+    for (repo_root, _members) in &repo_map {
+        let (owner, repo) = match git::get_github_owner_repo(repo_root) {
+            Ok(pair) => pair,
+            Err(e) => {
+                eprintln!("Skipping {:?}: {}", repo_root, e);
+                continue;
+            }
+        };
+
+        println!("=== {}/{} ===", owner, repo);
+
+        match fetch_open_prs(&octocrab, &owner, &repo).await {
+            Ok(total) => {
+                if total == 0 {
+                    println!("  No open pull requests.");
+                }
+            }
+            Err(e) => {
+                eprintln!("  Could not fetch PRs (maybe private or no access): {}", e);
+            }
+        }
+        println!();
+    }
+
+    Ok(())
+}
+
+async fn fetch_open_prs(octocrab: &octocrab::Octocrab, owner: &str, repo: &str) -> Result<usize> {
+    let mut page = 1u32;
+    let mut total = 0;
+    loop {
+        let prs = octocrab
+            .pulls(owner, repo)
+            .list()
+            .state(octocrab::params::State::Open)
+            .per_page(100)
+            .page(page)
+            .send()
+            .await?;
+
+        let items = prs.items;
+        if items.is_empty() {
+            break;
+        }
+
+        for pr in &items {
+            let number = pr.number;
+            let title = pr.title.as_deref().unwrap_or("(no title)");
+            let user = pr
+                .user
+                .as_ref()
+                .map(|u| u.login.as_str())
+                .unwrap_or("unknown");
+            println!("  #{} - {} (by {})", number, title, user);
+        }
+
+        total += items.len();
+
+        if prs.next.is_none() {
+            break;
+        }
+        page += 1;
+    }
+    Ok(total)
 }
 
 fn generate_meta() -> Result<()> {

@@ -181,6 +181,45 @@ fn run_git_cmd(repo_path: &Path, args: &[&str]) -> Result<()> {
     Ok(())
 }
 
+/// Extract (owner, repo) from the git remote "origin" URL.
+/// Supports both SSH (`git@github.com:owner/repo.git`) and HTTPS (`https://github.com/owner/repo.git`).
+pub fn get_github_owner_repo(repo_path: &Path) -> Result<(String, String)> {
+    let output = Command::new("git")
+        .current_dir(repo_path)
+        .args(["remote", "get-url", "origin"])
+        .output()
+        .context("Failed to get remote URL")?;
+
+    if !output.status.success() {
+        anyhow::bail!("Failed to get remote URL for {:?}", repo_path);
+    }
+
+    let url = String::from_utf8(output.stdout)?.trim().to_string();
+    parse_github_url(&url)
+        .with_context(|| format!("Could not parse GitHub owner/repo from URL: {}", url))
+}
+
+fn parse_github_url(url: &str) -> Result<(String, String)> {
+    // SSH: git@github.com:owner/repo.git
+    if let Some(rest) = url.strip_prefix("git@github.com:") {
+        let rest = rest.trim_end_matches(".git");
+        let parts: Vec<&str> = rest.splitn(2, '/').collect();
+        if parts.len() == 2 {
+            return Ok((parts[0].to_string(), parts[1].to_string()));
+        }
+    }
+    // HTTPS: https://github.com/owner/repo.git
+    if url.contains("github.com/") {
+        let after = url.split("github.com/").nth(1).unwrap_or("");
+        let after = after.trim_end_matches(".git");
+        let parts: Vec<&str> = after.splitn(2, '/').collect();
+        if parts.len() == 2 {
+            return Ok((parts[0].to_string(), parts[1].to_string()));
+        }
+    }
+    anyhow::bail!("Unrecognized GitHub URL format: {}", url)
+}
+
 pub fn execute_command(work_dir: &Path, command: &str) -> Result<()> {
     let status = if cfg!(target_os = "windows") {
         Command::new("cmd")
