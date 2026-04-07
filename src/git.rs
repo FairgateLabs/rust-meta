@@ -18,7 +18,12 @@ pub fn group_members_by_repo(members: &[PathBuf]) -> Result<HashMap<PathBuf, Vec
 }
 
 fn find_git_root(path: &Path) -> Result<Option<PathBuf>> {
-    let mut current = path.canonicalize().context("Failed to canonicalize path")?;
+    let mut current = path.canonicalize().with_context(|| {
+        format!(
+            "Failed to canonicalize path '{}'. Does the directory exist?",
+            path.display()
+        )
+    })?;
 
     loop {
         if current.join(".git").exists() {
