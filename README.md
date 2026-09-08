@@ -56,7 +56,9 @@ meta fetch
 
 # Create tags and push them
 meta tag 1.2.3          # Uses specific version (mandatory)
+meta tag 1.2.3 -f       # Force-updates an existing local tag
 meta push-tag 1.2.3     # Pushes specific version tag (mandatory)
+meta push-tag 1.2.3 -f  # Force-updates an existing remote tag
 ```
 
 ## Configuration

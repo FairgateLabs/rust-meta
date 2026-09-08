@@ -52,9 +52,19 @@ enum Commands {
     /// Fetch changes from remote in all repositories
     Fetch,
     /// Push the version tag to origin (vX.Y.Z)
-    PushTag { version: Version },
+    PushTag {
+        version: Version,
+        /// Force-update the remote tag if it already exists
+        #[arg(short = 'f', long)]
+        force: bool,
+    },
     /// Create a version tag in all repositories
-    Tag { version: Version },
+    Tag {
+        version: Version,
+        /// Force-update the tag if it already exists
+        #[arg(short = 'f', long)]
+        force: bool,
+    },
     /// Remove a branch in all repositories
     RemoveBranch {
         name: String,
@@ -98,11 +108,11 @@ fn main() -> Result<()> {
         Commands::Push => run_git_on_all(|repo, _| git::push(repo)),
         Commands::Pull => run_git_on_all(|repo, _| git::pull(repo)),
         Commands::Fetch => run_git_on_all(|repo, _| git::fetch(repo)),
-        Commands::PushTag { version } => {
-            run_git_on_all(|repo, _| git::push_tag(repo, &version.to_string()))
+        Commands::PushTag { version, force } => {
+            run_git_on_all(|repo, _| git::push_tag(repo, &version.to_string(), *force))
         }
-        Commands::Tag { version } => {
-            run_git_on_all(|repo, _| git::create_tag(repo, &version.to_string()))
+        Commands::Tag { version, force } => {
+            run_git_on_all(|repo, _| git::create_tag(repo, &version.to_string(), *force))
         }
         Commands::RemoveBranch { name, remote } => {
             run_git_on_all(|repo, _| git::remove_branch(repo, &name, *remote))
@@ -698,7 +708,7 @@ version = "1.2.3"
         assert!(stdout.contains("feature-x"));
 
         // Test Tag
-        crate::git::create_tag(root, "1.2.3")?;
+        crate::git::create_tag(root, "1.2.3", false)?;
         let output = std::process::Command::new("git")
             .current_dir(root)
             .args(&["tag"])
@@ -717,7 +727,7 @@ version = "1.2.3"
             .status()?;
 
         // Test PushTag
-        crate::git::push_tag(root, "1.2.3")?;
+        crate::git::push_tag(root, "1.2.3", false)?;
 
         // Verify tag exists in remote
         let output = std::process::Command::new("git")
@@ -726,6 +736,29 @@ version = "1.2.3"
             .output()?;
         let stdout = String::from_utf8(output.stdout)?;
         assert!(stdout.contains("v1.2.3"));
+
+        // Force-move the local tag to a new commit and update the remote tag.
+        fs::write(root.join("README.md"), "updated")?;
+        std::process::Command::new("git")
+            .current_dir(root)
+            .args(["add", "README.md"])
+            .status()?;
+        std::process::Command::new("git")
+            .current_dir(root)
+            .args(["commit", "-m", "Update"])
+            .status()?;
+        crate::git::create_tag(root, "1.2.3", true)?;
+        crate::git::push_tag(root, "1.2.3", true)?;
+
+        let local_tag = std::process::Command::new("git")
+            .current_dir(root)
+            .args(["rev-parse", "v1.2.3"])
+            .output()?;
+        let remote_tag = std::process::Command::new("git")
+            .current_dir(&remote_dir)
+            .args(["rev-parse", "v1.2.3"])
+            .output()?;
+        assert_eq!(local_tag.stdout, remote_tag.stdout);
 
         Ok(())
     }
@@ -913,7 +946,7 @@ version = "1.2.3"
             .status()?;
 
         // Test manual tag
-        crate::git::create_tag(root, "2.0.0-rc1")?;
+        crate::git::create_tag(root, "2.0.0-rc1", false)?;
 
         let output = std::process::Command::new("git")
             .current_dir(root)

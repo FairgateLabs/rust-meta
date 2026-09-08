@@ -151,16 +151,24 @@ pub fn commit(repo_path: &Path, message: &str, files: &[PathBuf]) -> Result<()> 
     run_git_cmd(repo_path, &["commit", "-m", message])
 }
 
-pub fn create_tag(repo_path: &Path, version: &str) -> Result<()> {
+pub fn create_tag(repo_path: &Path, version: &str, force: bool) -> Result<()> {
     println!("Creating tag 'v{}' in {:?}", version, repo_path);
     let tag_name = format!("v{}", version);
-    run_git_cmd(repo_path, &["tag", &tag_name])
+    if force {
+        run_git_cmd(repo_path, &["tag", "-f", &tag_name])
+    } else {
+        run_git_cmd(repo_path, &["tag", &tag_name])
+    }
 }
 
-pub fn push_tag(repo_path: &Path, version: &str) -> Result<()> {
+pub fn push_tag(repo_path: &Path, version: &str, force: bool) -> Result<()> {
     println!("Pushing tag 'v{}' in {:?}", version, repo_path);
     let tag_name = format!("v{}", version);
-    run_git_cmd(repo_path, &["push", "origin", &tag_name])
+    if force {
+        run_git_cmd(repo_path, &["push", "--force", "origin", &tag_name])
+    } else {
+        run_git_cmd(repo_path, &["push", "origin", &tag_name])
+    }
 }
 
 pub fn remove_tag(repo_path: &Path, name: &str, remote: bool) -> Result<()> {
